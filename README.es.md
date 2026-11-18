@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Versión 1.3.2" src="https://img.shields.io/badge/versión-1.3.2-b044d1">
+  <img alt="Versión 1.3.3" src="https://img.shields.io/badge/versión-1.3.3-b044d1">
   <img alt="Windows 10 y 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4">
   <img alt="C++17" src="https://img.shields.io/badge/C%2B%2B-17-00599C">
   <img alt="Licencia MIT" src="https://img.shields.io/badge/licencia-MIT-53D7B2">
@@ -109,6 +109,7 @@ Rocksmith.
 
 | Control | Acción |
 | --- | --- |
+| Idioma | Cambiar entre español e inglés |
 | Hotkey seleccionada | Mantener para silenciar; soltar para restaurar |
 | Cambiar hotkey | Capturar una tecla nueva |
 | Modo Rocksmith | Limitar la hotkey al juego y bloquearla antes de que Rocksmith la reciba |
@@ -116,6 +117,10 @@ Rocksmith.
 | Minimizar | Ocultar en el área de notificación |
 | Doble clic en el icono | Restaurar la ventana |
 | Clic derecho en el icono | Abrir o salir |
+
+La aplicación inicia en español si ese es el idioma de pantalla de Windows y
+en inglés en los demás casos. La selección se aplica al instante y queda
+guardada para el próximo inicio.
 
 ## Compilar en Windows
 
@@ -141,7 +146,7 @@ repositorio.
 
 ## Privacidad y seguridad
 
-La aplicación guarda únicamente la hotkey elegida, el estado del Modo Rocksmith,
+La aplicación guarda el idioma, la hotkey elegida, el estado del Modo Rocksmith,
 el identificador del dispositivo de audio y, mientras existe un corte, el estado
 necesario para recuperarlo en
 `%APPDATA%\Dayaah\RealToneKillswitch.ini`. No realiza

@@ -2,6 +2,15 @@
 
 All notable changes to Dayaah RealTone Killswitch are documented here.
 
+## [1.3.3] - 2026-11-18
+
+### Added
+
+- Spanish and English UI with a saved language selector that updates the
+  window, tray menu, status messages, and errors.
+- Dark interface styled after Dayaah Capture with the version visible in the
+  window and tray tooltip.
+
 ## [1.3.2] - 2026-11-10
 
 ### Fixed

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 1.3.2" src="https://img.shields.io/badge/version-1.3.2-b044d1">
+  <img alt="Version 1.3.3" src="https://img.shields.io/badge/version-1.3.3-b044d1">
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4">
   <img alt="C++17" src="https://img.shields.io/badge/C%2B%2B-17-00599C">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-53D7B2">
@@ -108,6 +108,7 @@ Actual response time depends on the device driver and Rocksmith's audio buffer.
 
 | Control | Action |
 | --- | --- |
+| Language | Switch between English and Spanish |
 | Selected hotkey | Hold to mute; release to restore |
 | Change hotkey | Capture a new keyboard key |
 | Rocksmith Mode | Limit the hotkey to the game and block it before Rocksmith receives it |
@@ -115,6 +116,10 @@ Actual response time depends on the device driver and Rocksmith's audio buffer.
 | Minimize | Hide to the notification area |
 | Tray icon double-click | Restore the window |
 | Tray icon right-click | Open or exit |
+
+The app starts in Spanish if Windows uses a Spanish display language and in
+English otherwise. Your selection takes effect immediately and is saved for
+the next launch.
 
 ## Build on Windows
 
@@ -139,8 +144,8 @@ Both scripts create `Dayaah_RealTone_Killswitch.exe` in the repository root.
 
 ## Privacy and security
 
-The application stores only the chosen hotkey, Rocksmith Mode state, Windows
-audio endpoint ID, and temporary cut-recovery state in
+The application stores the display language, chosen hotkey, Rocksmith Mode
+state, Windows audio endpoint ID, and temporary cut-recovery state in
 `%APPDATA%\Dayaah\RealToneKillswitch.ini`. It performs no background network
 requests. GitHub and Ko-fi open in the default browser only when their buttons
 are clicked.

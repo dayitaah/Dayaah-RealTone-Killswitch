@@ -8,8 +8,8 @@ IDI_KOFI ICON "kofi.ico"
 1 RT_MANIFEST "app.manifest"
 
 1 VERSIONINFO
-FILEVERSION 1,3,2,0
-PRODUCTVERSION 1,3,2,0
+FILEVERSION DAYAAH_VERSION_NUM
+PRODUCTVERSION DAYAAH_VERSION_NUM
 FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
 FILEFLAGS 0x1L
@@ -26,11 +26,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Dayaah\0"
             VALUE "FileDescription", "Killswitch momentaneo para Rocksmith Real Tone Cable\0"
-            VALUE "FileVersion", "1.3.2\0"
+            VALUE "FileVersion", DAYAAH_VERSION_TEXT
             VALUE "InternalName", "DayaahRealToneKillswitch\0"
             VALUE "OriginalFilename", "Dayaah_RealTone_Killswitch.exe\0"
             VALUE "ProductName", "Dayaah RealTone Killswitch\0"
-            VALUE "ProductVersion", "1.3.2\0"
+            VALUE "ProductVersion", DAYAAH_VERSION_TEXT
         END
     END
     BLOCK "VarFileInfo"

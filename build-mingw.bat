@@ -22,7 +22,7 @@ if errorlevel 1 goto :failed
 g++ -std=c++17 -O2 -s -Wall -Wextra -municode -mwindows ^
   -static -static-libgcc -static-libstdc++ ^
   main.cpp ..\build\app.res -o ..\Dayaah_RealTone_Killswitch.exe ^
-  -lole32 -luuid -lcomctl32 -lshell32 -lpropsys
+  -lole32 -luuid -lcomctl32 -lshell32 -lpropsys -ldwmapi -luxtheme
 if errorlevel 1 goto :failed
 
 popd

@@ -5,12 +5,14 @@
 #include <windowsx.h>
 #include <initguid.h>
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <propvarutil.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <uxtheme.h>
 
 #include <algorithm>
 #include <atomic>
@@ -18,15 +20,18 @@
 #include <cwchar>
 #include <cwctype>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "resource.h"
+#include "ui_text.h"
 
 namespace {
 
 constexpr wchar_t kClassName[] = L"DayaahRealToneKillswitchWindow";
-constexpr wchar_t kWindowTitle[] = L"Dayaah RealTone Killswitch";
+constexpr wchar_t kWindowTitle[] = L"Dayaah RealTone Killswitch v" DAYAAH_VERSION_TEXT;
+constexpr wchar_t kVersionLabel[] = L"v" DAYAAH_VERSION_TEXT;
 constexpr wchar_t kMutexName[] = L"Local\\DayaahRealToneKillswitch_1_0";
 
 constexpr UINT WM_TRAYICON = WM_APP + 1;
@@ -44,6 +49,17 @@ constexpr UINT ENDPOINT_RETRY_INTERVAL_MS = 3000;
 constexpr ULONGLONG MAX_SUPPRESSED_HOLD_MS = 30000;
 constexpr ULONGLONG RESTORE_RETRY_MS = 1000;
 
+constexpr int kClientWidth = 552;
+constexpr int kClientHeight = 416;
+constexpr COLORREF kBackground = RGB(10, 13, 18);
+constexpr COLORREF kSurface = RGB(24, 29, 39);
+constexpr COLORREF kBorder = RGB(51, 61, 77);
+constexpr COLORREF kText = RGB(235, 240, 248);
+constexpr COLORREF kMutedText = RGB(139, 151, 169);
+constexpr COLORREF kMint = RGB(104, 231, 193);
+constexpr COLORREF kAction = RGB(83, 215, 178);
+constexpr COLORREF kActionPressed = RGB(67, 188, 157);
+
 enum ControlId : int {
     IDC_DEVICE_COMBO = 1001,
     IDC_REFRESH = 1002,
@@ -55,6 +71,20 @@ enum ControlId : int {
     IDC_GITHUB = 1008,
     IDC_KOFI = 1009,
     IDC_ROCKSMITH_MODE = 1010,
+    IDC_DEVICE_LABEL = 1011,
+    IDC_HOTKEY_LABEL = 1012,
+    IDC_MUTE_HINT = 1013,
+    IDC_LANGUAGE_LABEL = 1014,
+    IDC_LANGUAGE = 1015,
+    IDC_TITLE = 1016,
+    IDC_VERSION = 1017,
+};
+
+enum class UiLanguage { Spanish, English };
+
+struct StatusMessage {
+    UiText text;
+    std::optional<int> levelPercent;
 };
 
 struct AudioDevice {
@@ -70,6 +100,11 @@ HWND g_captureButton = nullptr;
 HWND g_rocksmithModeCheck = nullptr;
 HWND g_status = nullptr;
 HFONT g_font = nullptr;
+HFONT g_titleFont = nullptr;
+HBRUSH g_backgroundBrush = nullptr;
+HBRUSH g_surfaceBrush = nullptr;
+int g_dpi = 96;
+bool g_darkTheme = false;
 HANDLE g_mutex = nullptr;
 HANDLE g_keyboardThread = nullptr;
 HANDLE g_keyboardReadyEvent = nullptr;
@@ -85,6 +120,8 @@ std::vector<AudioDevice> g_devices;
 
 std::wstring g_iniPath;
 std::wstring g_selectedDeviceId;
+UiLanguage g_language = UiLanguage::Spanish;
+StatusMessage g_currentStatus{ui::starting, std::nullopt};
 std::atomic<DWORD> g_hotkeyVk{VK_SPACE};
 std::atomic_bool g_captureMode{false};
 bool g_pendingLeftCtrlCapture = false;
@@ -101,6 +138,10 @@ std::atomic<ULONGLONG> g_hotkeyStartTick{0};
 ULONGLONG g_lastRestoreAttemptTick = 0;
 
 NOTIFYICONDATAW g_tray{};
+
+const wchar_t* Text(UiText text) {
+    return g_language == UiLanguage::Spanish ? text.spanish : text.english;
+}
 
 template <typename T>
 void SafeRelease(T*& value) {
@@ -136,6 +177,18 @@ std::wstring ConfigPath() {
 
 void LoadConfig() {
     g_iniPath = ConfigPath();
+
+    wchar_t language[8]{};
+    GetPrivateProfileStringW(L"Settings", L"Language", L"", language,
+                             static_cast<DWORD>(std::size(language)), g_iniPath.c_str());
+    if (std::wcscmp(language, L"es") == 0) {
+        g_language = UiLanguage::Spanish;
+    } else if (std::wcscmp(language, L"en") == 0) {
+        g_language = UiLanguage::English;
+    } else {
+        g_language = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_SPANISH
+                         ? UiLanguage::Spanish : UiLanguage::English;
+    }
 
     const DWORD attributes = GetFileAttributesW(g_iniPath.c_str());
     const bool existingConfig =
@@ -218,69 +271,75 @@ bool IsRocksmithWindow(HWND window) {
     return _wcsicmp(filename, L"Rocksmith2014.exe") == 0;
 }
 
-bool IsExtendedKey(DWORD vk) {
-    switch (vk) {
-        case VK_RMENU:
-        case VK_RCONTROL:
-        case VK_INSERT:
-        case VK_DELETE:
-        case VK_HOME:
-        case VK_END:
-        case VK_PRIOR:
-        case VK_NEXT:
-        case VK_LEFT:
-        case VK_RIGHT:
-        case VK_UP:
-        case VK_DOWN:
-        case VK_NUMLOCK:
-        case VK_DIVIDE:
-            return true;
-        default:
-            return false;
-    }
-}
-
 std::wstring KeyName(DWORD vk) {
     switch (vk) {
-        case VK_RMENU: return L"Alt derecho (AltGr)";
-        case VK_LMENU: return L"Alt izquierdo";
-        case VK_RCONTROL: return L"Ctrl derecho";
-        case VK_LCONTROL: return L"Ctrl izquierdo";
-        case VK_RSHIFT: return L"Shift derecho";
-        case VK_LSHIFT: return L"Shift izquierdo";
-        case VK_SPACE: return L"Barra espaciadora";
-        case VK_CAPITAL: return L"Bloq Mayus";
+        case VK_RMENU: return Text({L"Alt derecho (AltGr)", L"Right Alt (AltGr)"});
+        case VK_LMENU: return Text({L"Alt izquierdo", L"Left Alt"});
+        case VK_RCONTROL: return Text({L"Ctrl derecho", L"Right Ctrl"});
+        case VK_LCONTROL: return Text({L"Ctrl izquierdo", L"Left Ctrl"});
+        case VK_RSHIFT: return Text({L"Shift derecho", L"Right Shift"});
+        case VK_LSHIFT: return Text({L"Shift izquierdo", L"Left Shift"});
+        case VK_SPACE: return Text({L"Barra espaciadora", L"Space"});
+        case VK_CAPITAL: return Text({L"Bloq Mayús", L"Caps Lock"});
         case VK_ESCAPE: return L"Escape";
         case VK_RETURN: return L"Enter";
         case VK_TAB: return L"Tab";
-        case VK_BACK: return L"Retroceso";
+        case VK_BACK: return Text({L"Retroceso", L"Backspace"});
+        case VK_INSERT: return Text({L"Insertar", L"Insert"});
+        case VK_DELETE: return Text({L"Suprimir", L"Delete"});
+        case VK_HOME: return Text({L"Inicio", L"Home"});
+        case VK_END: return Text({L"Fin", L"End"});
+        case VK_PRIOR: return Text({L"Re Pág", L"Page Up"});
+        case VK_NEXT: return Text({L"Av Pág", L"Page Down"});
+        case VK_LEFT: return Text({L"Flecha izquierda", L"Left Arrow"});
+        case VK_RIGHT: return Text({L"Flecha derecha", L"Right Arrow"});
+        case VK_UP: return Text({L"Flecha arriba", L"Up Arrow"});
+        case VK_DOWN: return Text({L"Flecha abajo", L"Down Arrow"});
+        case VK_NUMLOCK: return Text({L"Bloq Num", L"Num Lock"});
+        case VK_DIVIDE: return Text({L"Dividir (teclado numérico)", L"Numpad Divide"});
         default: break;
     }
 
-    UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
-    LONG keyData = static_cast<LONG>(scan << 16);
-    if (IsExtendedKey(vk)) {
-        keyData |= (1 << 24);
-    }
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    const LONG keyData = static_cast<LONG>(scan << 16);
     wchar_t name[128]{};
     if (GetKeyNameTextW(keyData, name, static_cast<int>(std::size(name))) > 0) {
         return name;
     }
     wchar_t fallback[32]{};
-    wsprintfW(fallback, L"Tecla VK %lu", static_cast<unsigned long>(vk));
+    wsprintfW(fallback, Text({L"Tecla VK %lu", L"Key VK %lu"}),
+              static_cast<unsigned long>(vk));
     return fallback;
 }
 
-void SetStatus(const std::wstring& text) {
-    if (g_status) {
-        SetWindowTextW(g_status, text.c_str());
-        InvalidateRect(g_status, nullptr, TRUE);
+void RefreshStatus() {
+    if (!g_status) {
+        return;
     }
+    const wchar_t* text = Text(g_currentStatus.text);
+    wchar_t withLevel[128]{};
+    if (g_currentStatus.levelPercent) {
+        std::swprintf(withLevel, std::size(withLevel), text, *g_currentStatus.levelPercent);
+        text = withLevel;
+    }
+    SetWindowTextW(g_status, text);
+    InvalidateRect(g_status, nullptr, TRUE);
+}
+
+void SetStatus(UiText text, std::optional<int> levelPercent = std::nullopt) {
+    g_currentStatus = {text, levelPercent};
+    RefreshStatus();
+}
+
+void RefreshCaptureButton() {
+    SetWindowTextW(g_captureButton, Text(g_captureMode.load() ? ui::pressKey : ui::changeHotkey));
+    InvalidateRect(g_captureButton, nullptr, FALSE);
 }
 
 void RefreshHotkeyLabel() {
     if (g_hotkeyValue) {
         SetWindowTextW(g_hotkeyValue, KeyName(g_hotkeyVk.load()).c_str());
+        InvalidateRect(g_hotkeyValue, nullptr, FALSE);
     }
 }
 
@@ -374,7 +433,7 @@ bool RestoreAudioState() {
     }
 
     if (!g_restoreValid) {
-        SetStatus(L"ERROR: no conozco el estado anterior del Mute.");
+        SetStatus(ui::unknownMute);
         return false;
     }
 
@@ -388,7 +447,7 @@ bool RestoreAudioState() {
     if (SUCCEEDED(result)) {
         ClearRecoveryMarker();
         g_endpointReady.store(true);
-        SetStatus(L"LISTO - estado de Mute restaurado.");
+        SetStatus(ui::restored);
         g_cutActive = false;
         g_restoreValid = false;
         g_lastRestoreAttemptTick = 0;
@@ -397,7 +456,7 @@ bool RestoreAudioState() {
 
     g_lastRestoreAttemptTick = GetTickCount64();
     g_endpointReady.store(false);
-    SetStatus(L"ERROR: no pude restaurar el Mute. Reconecta el cable; reintentare.");
+    SetStatus(ui::restoreFailed);
     return false;
 }
 
@@ -423,7 +482,7 @@ bool EngageCut() {
             g_restoreValid = true;
             g_cutActive = true;
             SaveRecoveryMarker(currentMute);
-            SetStatus(L"CORTE ACTIVO - MUTE");
+            SetStatus(ui::muted);
             return true;
         }
 
@@ -432,7 +491,7 @@ bool EngageCut() {
     }
 
     g_restoreValid = false;
-    SetStatus(L"No pude activar Mute. Reconecta el cable o pulsa Actualizar.");
+    SetStatus(ui::muteFailed);
     ScheduleEndpointRetry();
     return false;
 }
@@ -449,12 +508,12 @@ bool ActivateDevice(const std::wstring& id, bool persist) {
         return false;
     }
     if (!g_enumerator || id.empty()) {
-        SetStatus(L"Conecta o selecciona el Rocksmith Real Tone Cable.");
+        SetStatus(ui::selectDevice);
         return false;
     }
 
     if (!OpenEndpointById(id)) {
-        SetStatus(L"No pude abrir ese dispositivo. Pulsa Actualizar.");
+        SetStatus(ui::openDeviceFailed);
         return false;
     }
 
@@ -466,11 +525,20 @@ bool ActivateDevice(const std::wstring& id, bool persist) {
     float current = 0.0f;
     if (SUCCEEDED(g_endpointVolume->GetMasterVolumeLevelScalar(&current))) {
         const int percent = static_cast<int>(std::lround(current * 100.0f));
-        SetStatus(L"LISTO - nivel actual " + std::to_wstring(percent) + L". Manten la hotkey para cortar.");
+        SetStatus(ui::readyWithLevel, percent);
     } else {
-        SetStatus(L"LISTO - manten la hotkey para cortar.");
+        SetStatus(ui::ready);
     }
     return true;
+}
+
+void RefreshDeviceLabels(LRESULT selected) {
+    SendMessageW(g_deviceCombo, CB_RESETCONTENT, 0, 0);
+    for (const auto& device : g_devices) {
+        const wchar_t* name = device.name.empty() ? Text(ui::inputDevice) : device.name.c_str();
+        SendMessageW(g_deviceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
+    }
+    SendMessageW(g_deviceCombo, CB_SETCURSEL, static_cast<WPARAM>(selected), 0);
 }
 
 void EnumerateDevices() {
@@ -482,14 +550,14 @@ void EnumerateDevices() {
     SendMessageW(g_deviceCombo, CB_RESETCONTENT, 0, 0);
 
     if (!g_enumerator) {
-        SetStatus(L"Windows Audio no esta disponible.");
+        SetStatus(ui::audioUnavailable);
         return;
     }
 
     IMMDeviceCollection* collection = nullptr;
     if (FAILED(g_enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection)) ||
         !collection) {
-        SetStatus(L"No pude enumerar los dispositivos de entrada.");
+        SetStatus(ui::enumerateFailed);
         return;
     }
 
@@ -507,7 +575,7 @@ void EnumerateDevices() {
         PropVariantInit(&nameValue);
 
         std::wstring id;
-        std::wstring name = L"Dispositivo de entrada";
+        std::wstring name;
         if (SUCCEEDED(device->GetId(&rawId)) && rawId) {
             id = rawId;
         }
@@ -519,7 +587,6 @@ void EnumerateDevices() {
 
         if (!id.empty()) {
             g_devices.push_back({id, name});
-            SendMessageW(g_deviceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name.c_str()));
         }
 
         PropVariantClear(&nameValue);
@@ -545,21 +612,21 @@ void EnumerateDevices() {
         }
     }
 
+    RefreshDeviceLabels(selected);
     if (selected >= 0) {
-        SendMessageW(g_deviceCombo, CB_SETCURSEL, selected, 0);
         ActivateDevice(g_devices[static_cast<size_t>(selected)].id, true);
     } else if (g_devices.empty()) {
-        SetStatus(L"No hay dispositivos de entrada activos.");
+        SetStatus(ui::noInputDevice);
         ScheduleEndpointRetry();
     } else {
-        SetStatus(L"Selecciona el Rocksmith Real Tone Cable en la lista.");
+        SetStatus(ui::selectDevice);
         ScheduleEndpointRetry();
     }
 }
 
 void BeginHotkeyCapture() {
     if (g_hotkeyHeld.load() || g_suppressHotkeyRelease.load()) {
-        SetStatus(L"Suelta primero la hotkey actual.");
+        SetStatus(ui::releaseHotkey);
         return;
     }
     g_hotkeyHeld.store(false);
@@ -574,23 +641,22 @@ void BeginHotkeyCapture() {
     g_pendingLeftCtrlCapture = false;
     KillTimer(g_window, TIMER_CAPTURE_CTRL);
     g_captureMode.store(true);
-    SetWindowTextW(g_captureButton, L"Presiona una tecla...");
-    SetStatus(L"Esperando nueva hotkey (Escape cancela)...");
+    RefreshCaptureButton();
+    SetStatus(ui::waitingForKey);
 }
 
 void FinishHotkeyCapture(DWORD vk) {
     KillTimer(g_window, TIMER_CAPTURE_CTRL);
     g_pendingLeftCtrlCapture = false;
     g_captureMode.store(false);
-    SetWindowTextW(g_captureButton, L"Cambiar hotkey");
+    RefreshCaptureButton();
     if (vk != VK_ESCAPE) {
         g_hotkeyVk.store(vk);
         SaveHotkey();
         RefreshHotkeyLabel();
-        SetStatus(L"Hotkey cambiada. Mantenla presionada para cortar.");
+        SetStatus(ui::hotkeyChanged);
     } else {
-        SetStatus(g_endpointVolume ? L"Cambio cancelado. Killswitch listo."
-                                   : L"Cambio cancelado. Selecciona el RealTone Cable.");
+        SetStatus(g_endpointVolume ? ui::captureCanceled : ui::captureCanceledNoDevice);
     }
 }
 
@@ -616,7 +682,7 @@ void AddTrayIcon() {
     if (!g_tray.hIcon) {
         g_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     }
-    lstrcpynW(g_tray.szTip, L"Dayaah RealTone Killswitch", static_cast<int>(std::size(g_tray.szTip)));
+    lstrcpynW(g_tray.szTip, kWindowTitle, static_cast<int>(std::size(g_tray.szTip)));
     Shell_NotifyIconW(NIM_ADD, &g_tray);
     g_tray.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &g_tray);
@@ -632,9 +698,9 @@ void ShowTrayMenu() {
     POINT point{};
     GetCursorPos(&point);
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, 1, L"Abrir");
+    AppendMenuW(menu, MF_STRING, 1, Text(ui::open));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, 2, L"Salir");
+    AppendMenuW(menu, MF_STRING, 2, Text(ui::exit));
     SetForegroundWindow(g_window);
     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                          point.x, point.y, 0, g_window, nullptr);
@@ -801,6 +867,53 @@ void StopKeyboardHookThread() {
     g_keyboardThreadId = 0;
 }
 
+int Scale(int value) {
+    return MulDiv(value, g_dpi, 96);
+}
+
+void CreateUiResources() {
+    HDC display = GetDC(nullptr);
+    if (display) {
+        g_dpi = std::max(96, GetDeviceCaps(display, LOGPIXELSX));
+        ReleaseDC(nullptr, display);
+    }
+
+    g_font = CreateFontW(-Scale(15), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                         DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    if (!g_font) g_font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    g_titleFont = CreateFontW(-Scale(26), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = sizeof(contrast);
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+        (contrast.dwFlags & HCF_HIGHCONTRASTON)) {
+        return;
+    }
+    g_backgroundBrush = CreateSolidBrush(kBackground);
+    g_surfaceBrush = CreateSolidBrush(kSurface);
+    g_darkTheme = g_backgroundBrush && g_surfaceBrush;
+}
+
+void ReleaseUiResources() {
+    if (g_titleFont) DeleteObject(g_titleFont);
+    if (g_font && g_font != GetStockObject(DEFAULT_GUI_FONT)) DeleteObject(g_font);
+    if (g_backgroundBrush) DeleteObject(g_backgroundBrush);
+    if (g_surfaceBrush) DeleteObject(g_surfaceBrush);
+}
+
+void ApplyWindowTheme(HWND window) {
+    if (!g_darkTheme) return;
+    // These are the documented attribute IDs. Older SDK headers omit their names.
+    constexpr DWORD useImmersiveDarkMode = 20;
+    constexpr DWORD captionColor = 35;
+    constexpr DWORD textColor = 36;
+    const BOOL dark = TRUE;
+    DwmSetWindowAttribute(window, useImmersiveDarkMode, &dark, sizeof(dark));
+    DwmSetWindowAttribute(window, captionColor, &kBackground, sizeof(kBackground));
+    DwmSetWindowAttribute(window, textColor, &kText, sizeof(kText));
+}
+
 void ApplyFont(HWND control) {
     SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
 }
@@ -808,19 +921,23 @@ void ApplyFont(HWND control) {
 HWND MakeControl(const wchar_t* className, const wchar_t* text, DWORD style,
                  int x, int y, int width, int height, int id) {
     HWND control = CreateWindowExW(0, className, text, WS_CHILD | WS_VISIBLE | style,
-                                    x, y, width, height, g_window,
+                                    Scale(x), Scale(y), Scale(width), Scale(height), g_window,
                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                                     g_instance, nullptr);
     ApplyFont(control);
+    if (g_darkTheme) {
+        SetWindowTheme(control, L"DarkMode_Explorer", nullptr);
+    }
     return control;
 }
 
 HIMAGELIST AddButtonIcon(HWND button, int resourceId) {
+    const int size = Scale(20);
     HICON icon = static_cast<HICON>(LoadImageW(g_instance, MAKEINTRESOURCEW(resourceId),
-                                               IMAGE_ICON, 20, 20, LR_DEFAULTCOLOR));
+                                               IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
     if (!icon) return nullptr;
 
-    HIMAGELIST images = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 1, 1);
+    HIMAGELIST images = ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK, 1, 1);
     if (!images) {
         DestroyIcon(icon);
         return nullptr;
@@ -828,57 +945,221 @@ HIMAGELIST AddButtonIcon(HWND button, int resourceId) {
     ImageList_AddIcon(images, icon);
     DestroyIcon(icon);
 
-    BUTTON_IMAGELIST imageList{};
-    imageList.himl = images;
-    imageList.margin = {8, 0, 8, 0};
-    imageList.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
-    SendMessageW(button, BCM_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(&imageList));
+    if (!g_darkTheme) {
+        BUTTON_IMAGELIST imageList{};
+        imageList.himl = images;
+        imageList.margin = {Scale(8), 0, Scale(8), 0};
+        imageList.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+        SendMessageW(button, BCM_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(&imageList));
+    }
     return images;
+}
+
+void DrawThemedButton(const DRAWITEMSTRUCT& item) {
+    const bool primary = item.CtlID == IDC_CAPTURE_HOTKEY;
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const COLORREF fill = primary ? (pressed ? kActionPressed : kAction)
+                                  : (pressed ? kBorder : kSurface);
+    HDC dc = item.hDC;
+    const int saved = SaveDC(dc);
+    const auto brush = static_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+    SetDCBrushColor(dc, fill);
+    FillRect(dc, &item.rcItem, brush);
+    if (!primary) {
+        SetDCBrushColor(dc, kBorder);
+        FrameRect(dc, &item.rcItem, brush);
+    }
+
+    RECT caption = item.rcItem;
+    InflateRect(&caption, -Scale(8), 0);
+    const HIMAGELIST icon = item.CtlID == IDC_GITHUB ? g_githubImageList
+                          : item.CtlID == IDC_KOFI ? g_kofiImageList : nullptr;
+    if (icon) {
+        const int size = Scale(20);
+        const int top = caption.top + (caption.bottom - caption.top - size) / 2;
+        ImageList_Draw(icon, 0, dc, caption.left, top, ILD_TRANSPARENT);
+        caption.left += size + Scale(6);
+    }
+
+    wchar_t label[128]{};
+    GetWindowTextW(item.hwndItem, label, static_cast<int>(std::size(label)));
+    SelectObject(dc, g_font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, primary ? RGB(5, 19, 16) : kText);
+    DrawTextW(dc, label, -1, &caption, DT_CENTER | DT_VCENTER | DT_SINGLELINE |
+                                         DT_END_ELLIPSIS | DT_NOPREFIX);
+    if ((item.itemState & (ODS_FOCUS | ODS_NOFOCUSRECT)) == ODS_FOCUS) {
+        RECT focus = item.rcItem;
+        InflateRect(&focus, -Scale(3), -Scale(3));
+        DrawFocusRect(dc, &focus);
+    }
+    RestoreDC(dc, saved);
+}
+
+void DrawThemedCombo(const DRAWITEMSTRUCT& item) {
+    const bool selected = (item.itemState & ODS_SELECTED) != 0 &&
+                          (item.itemState & ODS_COMBOBOXEDIT) == 0;
+    HDC dc = item.hDC;
+    const int saved = SaveDC(dc);
+    const auto brush = static_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+    SetDCBrushColor(dc, selected ? kBorder : kSurface);
+    FillRect(dc, &item.rcItem, brush);
+
+    const LRESULT length = item.itemID == static_cast<UINT>(-1) ? CB_ERR :
+        SendMessageW(item.hwndItem, CB_GETLBTEXTLEN, item.itemID, 0);
+    if (length != CB_ERR) {
+        std::wstring label(static_cast<size_t>(length) + 1, L'\0');
+        SendMessageW(item.hwndItem, CB_GETLBTEXT, item.itemID,
+                     reinterpret_cast<LPARAM>(label.data()));
+        RECT caption = item.rcItem;
+        InflateRect(&caption, -Scale(6), 0);
+        SelectObject(dc, g_font);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, kText);
+        DrawTextW(dc, label.c_str(), -1, &caption, DT_VCENTER | DT_SINGLELINE |
+                                                  DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+    if ((item.itemState & (ODS_FOCUS | ODS_NOFOCUSRECT)) == ODS_FOCUS) {
+        DrawFocusRect(dc, &item.rcItem);
+    }
+    RestoreDC(dc, saved);
+}
+
+void DrawThemedField(const DRAWITEMSTRUCT& item) {
+    HDC dc = item.hDC;
+    const int saved = SaveDC(dc);
+    const auto brush = static_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+    FillRect(dc, &item.rcItem, g_surfaceBrush);
+    SetDCBrushColor(dc, kBorder);
+    FrameRect(dc, &item.rcItem, brush);
+
+    COLORREF color = kText;
+    if (item.CtlID == IDC_STATUS) {
+        color = g_cutActive ? RGB(255, 154, 167)
+                            : g_endpointReady.load() ? kMint : RGB(245, 200, 130);
+    }
+    wchar_t label[160]{};
+    GetWindowTextW(item.hwndItem, label, static_cast<int>(std::size(label)));
+    SelectObject(dc, g_font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    RECT caption = item.rcItem;
+    InflateRect(&caption, -Scale(10), 0);
+    RECT measured = caption;
+    DrawTextW(dc, label, -1, &measured, DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+    caption.top += std::max(0L, (caption.bottom - measured.bottom) / 2);
+    DrawTextW(dc, label, -1, &caption, DT_WORDBREAK | DT_NOPREFIX);
+    RestoreDC(dc, saved);
+}
+
+void DrawThemedCheckbox(const NMCUSTOMDRAW& item) {
+    HDC dc = item.hdc;
+    const int saved = SaveDC(dc);
+    FillRect(dc, &item.rc, g_backgroundBrush);
+    const bool checked = SendMessageW(item.hdr.hwndFrom, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const int size = Scale(16);
+    const LONG top = item.rc.top + (item.rc.bottom - item.rc.top - size) / 2;
+    RECT box{item.rc.left, top, item.rc.left + size, top + size};
+    const auto brush = static_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+    SetDCBrushColor(dc, checked ? kAction : kSurface);
+    FillRect(dc, &box, brush);
+    if (checked) {
+        SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, RGB(5, 19, 16));
+        const POINT check[] = {{box.left + Scale(4), top + Scale(8)},
+                               {box.left + Scale(7), top + Scale(11)},
+                               {box.left + Scale(13), top + Scale(5)}};
+        Polyline(dc, check, static_cast<int>(std::size(check)));
+    } else {
+        SetDCBrushColor(dc, kMutedText);
+        FrameRect(dc, &box, brush);
+    }
+
+    RECT caption = item.rc;
+    caption.left += size + Scale(8);
+    SelectObject(dc, g_font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, kText);
+    DrawTextW(dc, Text(ui::rocksmithMode), -1, &caption,
+              DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if ((item.uItemState & CDIS_FOCUS) &&
+        !(SendMessageW(item.hdr.hwndFrom, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) {
+        DrawFocusRect(dc, &item.rc);
+    }
+    RestoreDC(dc, saved);
 }
 
 void OpenLink(const wchar_t* url) {
     ShellExecuteW(g_window, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+void RefreshUiLanguage() {
+    SetDlgItemTextW(g_window, IDC_DEVICE_LABEL, Text(ui::inputDevice));
+    SetDlgItemTextW(g_window, IDC_LANGUAGE_LABEL, Text(ui::language));
+    SetDlgItemTextW(g_window, IDC_REFRESH, Text(ui::refresh));
+    SetDlgItemTextW(g_window, IDC_HOTKEY_LABEL, Text(ui::momentaryHotkey));
+    SetDlgItemTextW(g_window, IDC_ROCKSMITH_MODE, Text(ui::rocksmithMode));
+    SetDlgItemTextW(g_window, IDC_MUTE_HINT, Text(ui::muteHint));
+    SetDlgItemTextW(g_window, IDC_KOFI, Text(ui::support));
+    SetDlgItemTextW(g_window, IDC_HIDE, Text(ui::hide));
+    SetDlgItemTextW(g_window, IDC_EXIT, Text(ui::exit));
+    RefreshHotkeyLabel();
+    RefreshCaptureButton();
+    RefreshStatus();
+    RedrawWindow(g_window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+
 void CreateControls() {
-    MakeControl(L"STATIC", L"Dispositivo de entrada", SS_LEFT, 20, 18, 300, 20, 0);
-    g_deviceCombo = MakeControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,
-                                20, 40, 375, 240, IDC_DEVICE_COMBO);
-    MakeControl(WC_BUTTONW, L"Actualizar", BS_PUSHBUTTON | WS_TABSTOP,
-                405, 39, 88, 25, IDC_REFRESH);
+    const DWORD buttonStyle = WS_TABSTOP | (g_darkTheme ? BS_OWNERDRAW : BS_PUSHBUTTON);
+    const DWORD comboStyle = WS_TABSTOP | CBS_DROPDOWNLIST |
+        (g_darkTheme ? CBS_OWNERDRAWFIXED | CBS_HASSTRINGS : 0);
+    const DWORD fieldStyle = g_darkTheme ? SS_OWNERDRAW : SS_LEFT | SS_CENTERIMAGE | WS_BORDER;
 
-    MakeControl(L"STATIC", L"Hotkey momentanea", SS_LEFT, 20, 84, 200, 20, 0);
-    g_hotkeyValue = MakeControl(L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE | WS_BORDER,
-                                20, 106, 245, 29, IDC_HOTKEY_VALUE);
-    g_captureButton = MakeControl(WC_BUTTONW, L"Cambiar hotkey", BS_PUSHBUTTON | WS_TABSTOP,
-                                  277, 106, 216, 29, IDC_CAPTURE_HOTKEY);
+    HWND title = MakeControl(L"STATIC", L"DAYAAH REALTONE KILLSWITCH", SS_LEFT,
+                             24, 18, 504, 34, IDC_TITLE);
+    if (g_titleFont) {
+        SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
+    }
+    MakeControl(L"STATIC", kVersionLabel, SS_LEFT, 25, 57, 120, 22, IDC_VERSION);
+    MakeControl(L"STATIC", L"", SS_RIGHT, 284, 56, 114, 24, IDC_LANGUAGE_LABEL);
+    HWND languageCombo = MakeControl(WC_COMBOBOXW, L"", comboStyle,
+                                     410, 51, 118, 124, IDC_LANGUAGE);
+    SendMessageW(languageCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Español"));
+    SendMessageW(languageCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"English"));
+    SendMessageW(languageCombo, CB_SETCURSEL, static_cast<WPARAM>(g_language), 0);
 
-    g_rocksmithModeCheck = MakeControl(
-        WC_BUTTONW, L"Modo Rocksmith: bloquear la hotkey elegida",
-        BS_AUTOCHECKBOX | WS_TABSTOP, 20, 145, 473, 24, IDC_ROCKSMITH_MODE);
+    MakeControl(L"STATIC", L"", SS_LEFT, 24, 104, 504, 22, IDC_DEVICE_LABEL);
+    g_deviceCombo = MakeControl(WC_COMBOBOXW, L"", comboStyle | WS_VSCROLL,
+                                24, 130, 365, 246, IDC_DEVICE_COMBO);
+    if (g_darkTheme) {
+        SendMessageW(languageCombo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(23));
+        SendMessageW(g_deviceCombo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), Scale(24));
+    }
+    MakeControl(WC_BUTTONW, L"", buttonStyle, 401, 130, 127, 30, IDC_REFRESH);
+
+    MakeControl(L"STATIC", L"", SS_LEFT, 24, 175, 504, 22, IDC_HOTKEY_LABEL);
+    g_hotkeyValue = MakeControl(L"STATIC", L"", fieldStyle, 24, 201, 245, 32, IDC_HOTKEY_VALUE);
+    g_captureButton = MakeControl(WC_BUTTONW, L"", buttonStyle,
+                                  281, 201, 247, 32, IDC_CAPTURE_HOTKEY);
+
+    g_rocksmithModeCheck = MakeControl(WC_BUTTONW, L"", BS_AUTOCHECKBOX | WS_TABSTOP,
+                                       24, 247, 504, 24, IDC_ROCKSMITH_MODE);
     SendMessageW(g_rocksmithModeCheck, BM_SETCHECK,
                  g_rocksmithMode.load() ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    MakeControl(L"STATIC",
-                L"Al mantenerla: Mute real. Al soltarla: restaura el estado anterior.",
-                SS_LEFT, 20, 175, 475, 20, 0);
+    MakeControl(L"STATIC", L"", SS_LEFT, 24, 276, 504, 22, IDC_MUTE_HINT);
+    g_status = MakeControl(L"STATIC", L"", fieldStyle, 24, 307, 504, 43, IDC_STATUS);
 
-    g_status = MakeControl(L"STATIC", L"Iniciando...", SS_LEFT | SS_CENTERIMAGE | WS_BORDER,
-                           20, 204, 473, 36, IDC_STATUS);
-
-    HWND githubButton = MakeControl(WC_BUTTONW, L"GitHub", BS_PUSHBUTTON | WS_TABSTOP,
-                                    20, 256, 235, 31, IDC_GITHUB);
-    HWND kofiButton = MakeControl(WC_BUTTONW, L"Apoyar en Ko-fi", BS_PUSHBUTTON | WS_TABSTOP,
-                                  267, 256, 226, 31, IDC_KOFI);
+    HWND githubButton = MakeControl(WC_BUTTONW, L"GitHub", buttonStyle,
+                                    24, 365, 104, 32, IDC_GITHUB);
+    HWND kofiButton = MakeControl(WC_BUTTONW, L"", buttonStyle, 140, 365, 146, 32, IDC_KOFI);
     g_githubImageList = AddButtonIcon(githubButton, IDI_GITHUB);
     g_kofiImageList = AddButtonIcon(kofiButton, IDI_KOFI);
 
-    MakeControl(WC_BUTTONW, L"Ocultar a bandeja", BS_PUSHBUTTON | WS_TABSTOP,
-                20, 300, 235, 30, IDC_HIDE);
-    MakeControl(WC_BUTTONW, L"Salir", BS_PUSHBUTTON | WS_TABSTOP,
-                267, 300, 226, 30, IDC_EXIT);
+    MakeControl(WC_BUTTONW, L"", buttonStyle, 298, 365, 145, 32, IDC_HIDE);
+    MakeControl(WC_BUTTONW, L"", buttonStyle, 455, 365, 73, 32, IDC_EXIT);
 
-    RefreshHotkeyLabel();
+    RefreshUiLanguage();
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -921,8 +1202,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 const bool restored = RestoreAudioState();
                 if (restored) {
                     SetStatus(g_rocksmithMode.load()
-                                  ? L"Modo Rocksmith activo: bloqueare la hotkey elegida."
-                                  : L"Modo global activo: la hotkey no se bloquea.");
+                                  ? ui::rocksmithModeOn : ui::globalModeOn);
                 } else {
                     SetTimer(window, TIMER_FAILSAFE, FAILSAFE_INTERVAL_MS, nullptr);
                 }
@@ -947,6 +1227,24 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 OpenLink(L"https://ko-fi.com/dayaah");
                 return 0;
             }
+            if (id == IDC_LANGUAGE) {
+                const HWND selector = reinterpret_cast<HWND>(lParam);
+                if (notification == CBN_SELENDOK ||
+                    (notification == CBN_SELCHANGE && !SendMessageW(selector, CB_GETDROPPEDSTATE, 0, 0))) {
+                    const LRESULT index = SendMessageW(selector, CB_GETCURSEL, 0, 0);
+                    if (index != CB_ERR && static_cast<UiLanguage>(index) != g_language) {
+                        g_language = static_cast<UiLanguage>(index);
+                        WritePrivateProfileStringW(L"Settings", L"Language",
+                                                   g_language == UiLanguage::Spanish ? L"es" : L"en",
+                                                   g_iniPath.c_str());
+                        RefreshUiLanguage();
+                        RefreshDeviceLabels(SendMessageW(g_deviceCombo, CB_GETCURSEL, 0, 0));
+                    }
+                } else if (notification == CBN_CLOSEUP && GetFocus() == selector) {
+                    SetFocus(window);
+                }
+                return 0;
+            }
             if (id == IDC_DEVICE_COMBO && notification == CBN_SELCHANGE) {
                 const LRESULT index = SendMessageW(g_deviceCombo, CB_GETCURSEL, 0, 0);
                 if (index >= 0 && static_cast<size_t>(index) < g_devices.size()) {
@@ -961,7 +1259,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             if (g_captureMode.load()) {
                 const DWORD vk = static_cast<DWORD>(wParam);
                 if (vk == VK_PACKET || vk == VK_PROCESSKEY) {
-                    SetStatus(L"Pulsa una tecla fisica distinta.");
+                    SetStatus(ui::physicalKey);
                     return 0;
                 }
                 // AltGr produces a synthetic Left Ctrl immediately before Right Alt.
@@ -1009,7 +1307,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 if (g_endpointReady.load() || g_selectedDeviceId.empty()) {
                     KillTimer(window, TIMER_ENDPOINT_RETRY);
                 } else if (!g_cutActive && OpenEndpointById(g_selectedDeviceId)) {
-                    SetStatus(L"LISTO - cable reconectado automaticamente.");
+                    SetStatus(ui::reconnected);
                 }
                 return 0;
             }
@@ -1032,7 +1330,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                         g_ignoreHotkeyUntilRelease.store(true);
                         const bool restored = RestoreAudioState();
                         if (heldTooLong && restored) {
-                            SetStatus(L"Failsafe: corte liberado tras 30 segundos.");
+                            SetStatus(ui::cutTimeout);
                         }
                     }
                 } else if (!suppress && held &&
@@ -1113,22 +1411,75 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             PostQuitMessage(0);
             return 0;
 
+        case WM_ERASEBKGND: {
+            if (!g_darkTheme) break;
+            RECT client{};
+            GetClientRect(window, &client);
+            FillRect(reinterpret_cast<HDC>(wParam), &client, g_backgroundBrush);
+            return TRUE;
+        }
+
         case WM_CTLCOLORSTATIC: {
+            if (!g_darkTheme) break;
             HDC dc = reinterpret_cast<HDC>(wParam);
-            HWND control = reinterpret_cast<HWND>(lParam);
-            if (control == g_status) {
-                SetBkMode(dc, TRANSPARENT);
-                if (g_cutActive) {
-                    SetTextColor(dc, RGB(190, 0, 60));
-                } else if (!g_endpointVolume) {
-                    SetTextColor(dc, RGB(160, 75, 0));
-                } else {
-                    SetTextColor(dc, RGB(0, 110, 55));
-                }
-                return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+            const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+            const COLORREF color = id == IDC_TITLE ? kMint
+                                 : id == IDC_VERSION || id == IDC_MUTE_HINT ||
+                                   id == IDC_LANGUAGE_LABEL ? kMutedText : kText;
+            SetTextColor(dc, color);
+            SetBkColor(dc, kBackground);
+            return reinterpret_cast<LRESULT>(g_backgroundBrush);
+        }
+
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORLISTBOX: {
+            if (!g_darkTheme) break;
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, kText);
+            SetBkColor(dc, kSurface);
+            return reinterpret_cast<LRESULT>(g_surfaceBrush);
+        }
+
+        case WM_CTLCOLORBTN: {
+            if (!g_darkTheme) break;
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, kText);
+            SetBkColor(dc, kBackground);
+            return reinterpret_cast<LRESULT>(g_backgroundBrush);
+        }
+
+        case WM_MEASUREITEM: {
+            auto& item = *reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            if (g_darkTheme && item.CtlType == ODT_COMBOBOX) {
+                item.itemHeight = Scale(26);
+                return TRUE;
             }
             break;
         }
+
+        case WM_DRAWITEM: {
+            if (!g_darkTheme) break;
+            const auto& item = *reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+            switch (item.CtlType) {
+                case ODT_BUTTON: DrawThemedButton(item); return TRUE;
+                case ODT_COMBOBOX: DrawThemedCombo(item); return TRUE;
+                case ODT_STATIC: DrawThemedField(item); return TRUE;
+            }
+            break;
+        }
+
+        case WM_NOTIFY: {
+            const auto& header = *reinterpret_cast<const NMHDR*>(lParam);
+            if (g_darkTheme && header.idFrom == IDC_ROCKSMITH_MODE && header.code == NM_CUSTOMDRAW) {
+                const auto& item = *reinterpret_cast<const NMCUSTOMDRAW*>(lParam);
+                if (item.dwDrawStage == CDDS_PREPAINT) {
+                    DrawThemedCheckbox(item);
+                    return CDRF_SKIPDEFAULT;
+                }
+            }
+            break;
+        }
+
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
@@ -1150,7 +1501,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     LoadConfig();
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(comResult)) {
-        MessageBoxW(nullptr, L"No pude iniciar Windows Audio (COM).", kWindowTitle, MB_ICONERROR);
+        MessageBoxW(nullptr, Text(ui::comError), kWindowTitle, MB_ICONERROR);
         return 1;
     }
 
@@ -1161,13 +1512,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&controls);
 
-    NONCLIENTMETRICSW metrics{};
-    metrics.cbSize = sizeof(metrics);
-    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0)) {
-        g_font = CreateFontIndirectW(&metrics.lfMessageFont);
-    } else {
-        g_font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    }
+    CreateUiResources();
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -1179,11 +1524,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     windowClass.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP),
                                                         IMAGE_ICON, 16, 16, 0));
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    windowClass.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+    windowClass.hbrBackground = g_darkTheme ? nullptr : GetSysColorBrush(COLOR_WINDOW);
     windowClass.lpszClassName = kClassName;
     RegisterClassExW(&windowClass);
 
-    RECT wanted{0, 0, 520, 350};
+    RECT wanted{0, 0, Scale(kClientWidth), Scale(kClientHeight)};
     AdjustWindowRectEx(&wanted, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                        FALSE, 0);
     const int width = wanted.right - wanted.left;
@@ -1195,14 +1540,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
                                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                                x, y, width, height, nullptr, nullptr, instance, nullptr);
     if (!g_window) {
-        MessageBoxW(nullptr, L"No pude crear la ventana.", kWindowTitle, MB_ICONERROR);
+        MessageBoxW(nullptr, Text(ui::windowError), kWindowTitle, MB_ICONERROR);
+        ReleaseUiResources();
         SafeRelease(g_enumerator);
         CoUninitialize();
         return 1;
     }
 
+    ApplyWindowTheme(g_window);
+
     if (!StartKeyboardHookThread()) {
-        MessageBoxW(g_window, L"No pude activar la hotkey global.", kWindowTitle, MB_ICONWARNING);
+        MessageBoxW(g_window, Text(ui::hookError), kWindowTitle, MB_ICONWARNING);
     }
 
     ShowWindow(g_window, showCommand);
@@ -1217,7 +1565,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     StopKeyboardHookThread();
     SafeRelease(g_endpointVolume);
     SafeRelease(g_enumerator);
-    if (g_font && g_font != GetStockObject(DEFAULT_GUI_FONT)) DeleteObject(g_font);
+    ReleaseUiResources();
     CoUninitialize();
     if (g_mutex) CloseHandle(g_mutex);
     return static_cast<int>(message.wParam);

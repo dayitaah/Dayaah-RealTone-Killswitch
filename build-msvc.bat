@@ -19,11 +19,11 @@ pushd src
 rc /nologo /fo ..\build\app.res app.rc
 if errorlevel 1 goto :failed
 
-cl /nologo /std:c++17 /O2 /MT /EHsc /DUNICODE /D_UNICODE ^
+cl /nologo /std:c++17 /utf-8 /O2 /MT /EHsc /DUNICODE /D_UNICODE ^
   /Fo..\build\ /Fe:..\Dayaah_RealTone_Killswitch.exe ^
   main.cpp ..\build\app.res ^
   /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF ^
-  ole32.lib uuid.lib comctl32.lib shell32.lib propsys.lib user32.lib gdi32.lib
+  ole32.lib uuid.lib comctl32.lib shell32.lib propsys.lib user32.lib gdi32.lib dwmapi.lib uxtheme.lib
 if errorlevel 1 goto :failed
 
 popd
