@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Killswitch momentáneo por software para Rocksmith Real Tone Cable en Windows.
+  Killswitch por software para guitarra, micrófonos y otras entradas de audio en Windows. Mantén presionada una tecla para silenciar la entrada y suéltala para recuperar el audio.
 </p>
 
 <p align="center">
