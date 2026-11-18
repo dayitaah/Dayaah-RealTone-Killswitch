@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A momentary software killswitch for the Rocksmith Real Tone Cable on Windows.
+   A software killswitch for guitar and other Windows audio inputs. Hold a key to mute, release to restore audio.
 </p>
 
 <p align="center">
