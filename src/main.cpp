@@ -312,7 +312,7 @@ bool OpenEndpointById(const std::wstring& id) {
     IMMDevice* device = nullptr;
     HRESULT result = g_enumerator->GetDevice(id.c_str(), &device);
     if (SUCCEEDED(result)) {
-        result = device->Activate(IID_IAudioEndpointVolume, CLSCTX_ALL, nullptr,
+        result = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
                                   reinterpret_cast<void**>(&g_endpointVolume));
     }
     SafeRelease(device);
@@ -353,7 +353,7 @@ void RecoverPendingAudioState() {
     IAudioEndpointVolume* endpoint = nullptr;
     HRESULT result = g_enumerator->GetDevice(deviceId, &device);
     if (SUCCEEDED(result)) {
-        result = device->Activate(IID_IAudioEndpointVolume, CLSCTX_ALL, nullptr,
+        result = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
                                   reinterpret_cast<void**>(&endpoint));
     }
     if (SUCCEEDED(result) && endpoint) {
@@ -1154,8 +1154,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         return 1;
     }
 
-    CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL,
-                     IID_IMMDeviceEnumerator, reinterpret_cast<void**>(&g_enumerator));
+    CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                     __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&g_enumerator));
     RecoverPendingAudioState();
 
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};

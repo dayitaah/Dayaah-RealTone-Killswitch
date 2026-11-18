@@ -23,7 +23,7 @@ cl /nologo /std:c++17 /O2 /MT /EHsc /DUNICODE /D_UNICODE ^
   /Fo..\build\ /Fe:..\Dayaah_RealTone_Killswitch.exe ^
   main.cpp ..\build\app.res ^
   /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF ^
-  ole32.lib uuid.lib comctl32.lib shell32.lib propsys.lib
+  ole32.lib uuid.lib comctl32.lib shell32.lib propsys.lib user32.lib gdi32.lib
 if errorlevel 1 goto :failed
 
 popd
