@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: v1.2.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows and Rocksmith version
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Recording device
+      placeholder: Rocksmith USB Guitar Adapter
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the selected hotkey and whether the app was visible or in the tray.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+

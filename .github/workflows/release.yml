@@ -1,0 +1,48 @@
+name: Publish tagged release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # v1.3.2 is published with the Windows binary already tested in Rocksmith.
+    if: github.ref_name != 'v1.3.2'
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build with MSVC
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_PATH=%%i"
+          if not defined VS_PATH exit /b 1
+          call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          call build-msvc.bat
+
+      - name: Package Windows x64 release
+        shell: pwsh
+        run: |
+          $zip = "Dayaah_RealTone_Killswitch_$env:GITHUB_REF_NAME`_Windows_x64.zip"
+          Compress-Archive -Path Dayaah_RealTone_Killswitch.exe, README.md, README.es.md, LICENSE -DestinationPath $zip
+          "RELEASE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Create release and upload ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:GITHUB_REF_NAME" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "$env:GITHUB_REF_NAME" "$env:RELEASE_ZIP" --clobber
+          } else {
+            gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ZIP" --generate-notes --title "Dayaah RealTone Killswitch $env:GITHUB_REF_NAME"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
